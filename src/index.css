@@ -1,0 +1,19 @@
+@import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700&display=swap');
+
+:root {
+  --alianza-blue: #003366;
+  --alianza-green: #00a650;
+}
+
+body {
+  background-color: #f4f6f9;
+  font-family: 'Montserrat', sans-serif;
+}
+
+.navbar-custom {
+  background-color: var(--alianza-blue) !important;
+}
+
+.text-custom-blue {
+  color: var(--alianza-blue) !important;
+}
