@@ -1,3 +1,104 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* AQUÍ PEGAS TODO EL CÓDIGO NUEVO */
+* {
+  box-sizing: border-box;
+}
+
+@media (max-width: 768px) {
+  nav {
+    height: auto !important;
+    flex-direction: column !important;
+    padding: 15px !important;
+    gap: 15px !important;
+  }
+  
+  .container {
+    margin: 15px auto !important;
+    padding: 0 10px !important;
+  }
+
+  .hero-section {
+    grid-template-columns: 1fr !important;
+    gap: 20px !important;
+  }
+
+  .form-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  .action-buttons {
+    flex-direction: column !important;
+    align-items: stretch !important;
+  }
+
+  table {
+    font-size: 12px !important;
+  }
+}
+
+@media (max-width: 480px) {
+  .navbar-brand {
+    font-size: 18px !important;
+  }
+}
+/* Reglas para Celulares y Tablets */
+@media (max-width: 900px) {
+  /* 1. El menú de navegación se hace deslizable en horizontal */
+  nav {
+    padding: 10px 15px !important;
+    display: flex !important;
+    flex-direction: column !important;
+    height: auto !important;
+  }
+
+  /* Los enlaces del menú (Inicio, Historial, etc) */
+  .navLinks {
+    width: 100%;
+    display: flex !important;
+    flex-direction: row !important;
+    justify-content: flex-start !important;
+    overflow-x: auto !important; /* Permite deslizar con el dedo */
+    white-space: nowrap;
+    padding-bottom: 5px;
+    gap: 10px !important;
+  }
+
+  /* Ocultamos la barra de scroll fea para que se vea como app nativa */
+  .navLinks::-webkit-scrollbar {
+    display: none;
+  }
+
+  .container {
+    margin: 15px auto !important;
+    padding: 0 15px !important;
+  }
+
+  /* Apilamos las cosas */
+  .hero-section {
+    grid-template-columns: 1fr !important;
+    gap: 20px !important;
+  }
+
+  .form-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  .action-buttons {
+    flex-direction: column !important;
+    align-items: stretch !important;
+  }
+
+  .dashboard-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* Hacemos las tablas deslizables para que no se rompa el diseño */
+  table {
+    display: block;
+    overflow-x: auto;
+    white-space: nowrap;
+  }
+}

@@ -3,19 +3,19 @@ import { createClient } from '@supabase/supabase-js'
 import { useDropzone } from 'react-dropzone'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
-import { FaCarCrash, FaHistory, FaPlus, FaTrash, FaCheckCircle, FaClipboardList, FaArrowLeft, FaFilePdf, FaCamera, FaTools, FaSearch, FaSave, FaSyncAlt, FaChartBar, FaSignOutAlt, FaUserTie, FaKey, FaQuestionCircle } from 'react-icons/fa'
+import { FaCarCrash, FaHistory, FaPlus, FaTrash, FaCheckCircle, FaClipboardList, FaArrowLeft, FaFilePdf, FaCamera, FaTools, FaSearch, FaSave, FaSyncAlt, FaChartBar, FaSignOutAlt, FaUserTie, FaKey, FaFileAlt, FaMagic } from 'react-icons/fa'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts'
 
 import logoAlianza from './logo.png'
 import firmaGuillermo from './firma_guillermo.png'
 import firmaCompanero from './firma_companero.png'
-import Ayuda from './Ayuda' // <-- IMPORTAMOS LA AYUDA
+import Ayuda from './Ayuda'
 
 const supabaseUrl = 'https://zznrbucuhqgatpghrdxo.supabase.co'
 const supabaseKey = 'sb_publishable_ZTdxdW4IvtTAxeVOIAP2BA_aU4wj9fu' 
 const supabase = createClient(supabaseUrl, supabaseKey)
 
-// LISTAS BASE PARA AUTOCOMPLETADO
+// LISTAS BASE
 const PIEZAS_BASE = ["PARACHOQUE DEL", "PARACHOQUE TRAS", "GUARDABARRO RH DEL", "GUARDABARRO LH DEL", "CAPOT", "MASCARA FRONTAL", "FAROL RH", "FAROL LH", "PUERTA DEL LH", "PUERTA DEL RH", "PARABRISAS DEL", "PARABRISAS TRAS"];
 const MANO_OBRA_BASE = ["PULIDO", "ENDEREZADO", "PINTURA", "ALINEACION DE FARO", "REPARACION DE PARACHOQUE", "DESABOLLADO", "MECANICA", "ELECTRICIDAD"];
 const MARCAS_BASE = ["TOYOTA", "NISSAN", "MITSUBISHI", "CHEVROLET", "SUZUKI", "HYUNDAI", "KIA", "FORD", "VOLKSWAGEN", "HONDA", "MAZDA", "JEEP"];
@@ -37,11 +37,21 @@ export default function App() {
   const [busqueda, setBusqueda] = useState('');
   const [cargando, setCargando] = useState(false);
   
+  // ESTADOS PARA EL OCR
+  const [procesandoOCR, setProcesandoOCR] = useState(false);
+  const [textoOCR, setTextoOCR] = useState('');
+  const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
+
   // ESTADOS PARA CAMBIO DE CONTRASEÑA
   const [mostrarCambioPass, setMostrarCambioPass] = useState(false);
   const [nuevaPass, setNuevaPass] = useState('');
   const [passActual, setPassActual] = useState('');
   const [mensajePass, setMensajePass] = useState('');
+
+  // ESTADOS PARA EL VISOR DE PROFORMA
+  const [proformaUrl, setProformaUrl] = useState(null);
+  const [mostrarVisor, setMostrarVisor] = useState(false);
+  const [tipoArchivo, setTipoArchivo] = useState('');
 
   // ESTADOS PARA LAS LISTAS QUE APRENDEN
   const [listaTalleres, setListaTalleres] = useState([]);
@@ -87,7 +97,7 @@ export default function App() {
     setListaObsGenerales(savedObsGenerales);
   }, []);
 
-  // --- LÓGICA DE LOGIN Y ASIGNACIÓN DE PERITO ---
+  // --- LÓGICA DE LOGIN ---
   const asignarPerito = (emailUsuario) => {
     const emailLower = emailUsuario.toLowerCase();
     if (emailLower === 'brian.moreira@full-assistance.net') return 'BRIAN MOREIRA';
@@ -120,25 +130,167 @@ export default function App() {
     setInspeccionSeleccionada(null);
   };
 
-  // --- FUNCIÓN PARA CAMBIAR CONTRASEÑA ---
   const handleCambiarPassword = async (e) => {
     e.preventDefault();
     setMensajePass('');
-    
-    const { error } = await supabase.auth.updateUser({
-      password: nuevaPass,
-      currentPassword: passActual 
-    });
-
-    if (error) {
-      setMensajePass("Error: " + error.message);
-    } else {
+    const { error } = await supabase.auth.updateUser({ password: nuevaPass });
+    if (error) setMensajePass("Error: " + error.message);
+    else {
       setMensajePass("¡Contraseña actualizada con éxito!");
-      setNuevaPass('');
-      setPassActual('');
+      setNuevaPass(''); setPassActual('');
       setTimeout(() => setMostrarCambioPass(false), 2000);
     }
   };
+
+  // --- LA MAGIA DEL OCR CON GEMINI ---
+  const onProformaDrop = useCallback(async (acceptedFiles) => {
+    if (!acceptedFiles?.length) return;
+    if (!GEMINI_API_KEY) {
+      alert("⚠️ Falta configurar la API Key de Gemini en el archivo .env");
+      return;
+    }
+
+    setCargando(true);
+    setProcesandoOCR(true);
+    const file = acceptedFiles[0];
+    const fileExt = file.name.split('.').pop();
+    const fileName = `proforma-${Date.now()}.${fileExt}`;
+    
+    try {
+      const { error: uploadError } = await supabase.storage.from('proformas-pdf').upload(fileName, file);
+      if (!uploadError) {
+        const { data } = await supabase.storage.from('proformas-pdf').getPublicUrl(fileName);
+        setProformaUrl(data.publicUrl);
+        setTipoArchivo(file.type);
+      }
+
+      const base64Data = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result.split(',')[1]);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+
+      const prompt = `Eres un auditor experto en peritaje de seguros de vehículos. Tu trabajo es leer esta proforma de taller y extraer los datos con precisión quirúrgica.
+
+Devuelve EXCLUSIVAMENTE un JSON válido, sin texto extra, con esta estructura:
+{
+  "items": [
+    { "nombre": "NOMBRE DEL ITEM EN MAYÚSCULAS", "precio": 123.45, "tipo": "MANO_OBRA" o "REPUESTO" }
+  ]
+}
+
+REGLAS ESTRICTAS DE EXTRACCIÓN:
+1. Los PRECIOS deben ser exactamente los que figuran en la columna de total o precio unitario de la proforma. NO inventes ni sumes valores.
+2. "MANO_OBRA" = trabajos, servicios, pintura, enderezado, pulido, alineación, etc.
+3. "REPUESTO" = piezas, partes, materiales.
+4. Ignora códigos de artículo largos (ej. números de parte), placas, datos del cliente, subtotales generales, impuestos (IVA) y el total final.
+5. Los nombres deben ir en MAYÚSCULAS y sin caracteres raros, tal cual aparecen en el documento.
+6. Si un ítem no tiene precio claro o está tachado, usa 0.
+7. Si no hay ítems reconocibles, devuelve {"items": []}.`;
+
+      const payload = {
+        contents: [{ 
+          parts: [
+            { text: prompt }, 
+            { 
+              inline_data: { mime_type: file.type, data: base64Data },
+             
+            } 
+          ] 
+        }],
+        generationConfig: { temperature: 0.1, responseMimeType: "application/json" }
+      };
+
+      // SISTEMA DE REINTENTOS PARA CUANDO GOOGLE ESTÁ SATURADO
+      let response;
+      let intentos = 0;
+      let maxIntentos = 3;
+
+      while (intentos < maxIntentos) {
+        try {
+          // Intentamos con el modelo 3.8
+          response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${GEMINI_API_KEY}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+          
+          // Si la respuesta es exitosa o es un error de nuestra culpa (400, 401), salimos del bucle
+          if (response.ok || (response.status !== 503 && response.status !== 429)) break; 
+          
+        } catch (e) {
+          console.warn("Fallo de red, reintentando...");
+        }
+
+        intentos++;
+        if (intentos < maxIntentos) {
+          await new Promise(res => setTimeout(res, 2000)); // Espera 2 segundos antes de reintentar
+        }
+      }
+
+      // Si de plano Google no responde, usamos el modelo de respaldo (1.5-flash)
+      if (response && !response.ok && (response.status === 503 || response.status === 429)) {
+        console.warn("El modelo 3.8 está saturado. Usando respaldo 1.5...");
+        response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+      }
+
+      if (!response || !response.ok) {
+        const errText = response ? await response.text() : "Error de red";
+        throw new Error(`La IA de Google está muy saturada en este momento (${response?.status}). Intenta de nuevo en 1 minuto.\n\nDetalle: ${errText.slice(0, 100)}`);
+      }
+
+      const dataJSON = await response.json();
+      const candidate = dataJSON?.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!candidate) throw new Error("Gemini no devolvió contenido. Puede que el archivo no sea legible.");
+
+      let textoRespuesta = candidate.replace(/```json/gi, '').replace(/```/g, '').trim();
+      let resultado;
+      try { resultado = JSON.parse(textoRespuesta); } 
+      catch (parseErr) {
+        const match = textoRespuesta.match(/\{[\s\S]*\}/);
+        if (!match) throw new Error("Respuesta de Gemini no contiene JSON válido.");
+        resultado = JSON.parse(match[0]);
+      }
+      
+      let nuevosRepuestos = [];
+      let nuevaManoObra = [];
+
+      if (Array.isArray(resultado.items)) {
+        resultado.items.forEach(item => {
+          const nombre = String(item.nombre || '').toUpperCase().trim();
+          const precio = Number(item.precio) || 0;
+          if (!nombre) return;
+
+          if (item.tipo === 'MANO_OBRA') {
+            nuevaManoObra.push({ nombre, precioOriginal: precio, accion: 'APROBADO', precioAprobado: precio, observacion: '' });
+          } else {
+            nuevosRepuestos.push({ nombre, precioOriginal: precio, accion: 'CAMBIO', descuento: '', observacion: '' });
+          }
+        });
+      }
+
+      if (nuevosRepuestos.length > 0 || nuevaManoObra.length > 0) {
+        setNuevaInspeccion(prev => ({ ...prev, repuestos: [...prev.repuestos, ...nuevosRepuestos], manoObra: [...prev.manoObra, ...nuevaManoObra] }));
+        alert(`✅ ¡Proforma leída por Gemini!\n\nMano de obra: ${nuevaManoObra.length}\nRepuestos: ${nuevosRepuestos.length}`);
+      } else {
+        alert("Gemini leyó el PDF pero no detectó ítems claros. Revisa manualmente.");
+      }
+
+    } catch (error) {
+      console.error("Error OCR Gemini:", error);
+      alert("❌ Error al procesar con Gemini:\n" + error.message);
+    } finally {
+      setCargando(false);
+      setProcesandoOCR(false);
+    }
+  }, [GEMINI_API_KEY]);
+
+  const { getRootProps: getRootPropsProforma, getInputProps: getInputPropsProforma } = useDropzone({ onDrop: onProformaDrop, accept: {'image/*': [], 'application/pdf': []}, maxFiles: 1 });
 
   const cargarInspecciones = async () => {
     const { data, error } = await supabase.from('inspecciones').select('*').order('id', { ascending: false });
@@ -185,6 +337,8 @@ export default function App() {
     if(window.confirm("¿Estás seguro de limpiar todos los datos del formulario?")) {
       setNuevaInspeccion({ placa: '', tramite: '', taller: '', marca: '', modelo: '', tipoVehiculo: '', descuentoGlobalManoObra: '', observaciones_generales: '', repuestos: [], manoObra: [], perito: asignarPerito(session.user.email) });
       setFotosSubidas([]);
+      setProformaUrl(null);
+      setTextoOCR('');
     }
   };
 
@@ -201,7 +355,6 @@ export default function App() {
     return `INSP-${year}-${String(count).padStart(4, '0')}`;
   };
 
-  // --- GUARDAR Y APRENDER ---
   const guardarYGenerar = async (e, soloGuardar = false) => {
     if(e) e.preventDefault();
     if(!nuevaInspeccion.placa) return alert("La placa es obligatoria");
@@ -231,14 +384,26 @@ export default function App() {
     });
 
     const codigo = generarCodigo();
+    
+    // REDONDEO APLICADO AQUÍ PARA QUE SUPABASE NO FALLE
     const datosParaGuardar = {
       codigo: codigo,
-      taller: nuevaInspeccion.taller, proforma: totalProforma, diagnostico: totalDiagnostico,
-      ahorro: ajusteNeto, placa: nuevaInspeccion.placa, tramite: nuevaInspeccion.tramite,
-      marca: nuevaInspeccion.marca, modelo: nuevaInspeccion.modelo, tipoVehiculo: nuevaInspeccion.tipoVehiculo,
-      observaciones_generales: nuevaInspeccion.observaciones_generales, repuestos: nuevaInspeccion.repuestos, 
-      manoObra: nuevaInspeccion.manoObra, descuentoGlobalManoObra: nuevaInspeccion.descuentoGlobalManoObra === '' ? null : Number(nuevaInspeccion.descuentoGlobalManoObra),
-      fotos: fotosSubidas, perito: nuevaInspeccion.perito
+      taller: nuevaInspeccion.taller, 
+      proforma: Math.round(totalProforma), 
+      diagnostico: Math.round(totalDiagnostico),
+      ahorro: Math.round(ajusteNeto), 
+      placa: nuevaInspeccion.placa, 
+      tramite: nuevaInspeccion.tramite,
+      marca: nuevaInspeccion.marca, 
+      modelo: nuevaInspeccion.modelo, 
+      tipoVehiculo: nuevaInspeccion.tipoVehiculo,
+      observaciones_generales: nuevaInspeccion.observaciones_generales, 
+      repuestos: nuevaInspeccion.repuestos, 
+      manoObra: nuevaInspeccion.manoObra, 
+      descuentoGlobalManoObra: nuevaInspeccion.descuentoGlobalManoObra === '' ? null : Number(nuevaInspeccion.descuentoGlobalManoObra),
+      fotos: fotosSubidas, 
+      perito: nuevaInspeccion.perito,
+      proforma_pdf: proformaUrl
     };
     
     const { error } = await supabase.from('inspecciones').insert([datosParaGuardar]);
@@ -247,6 +412,8 @@ export default function App() {
       if(!soloGuardar) {
         setNuevaInspeccion({ placa: '', tramite: '', taller: '', marca: '', modelo: '', tipoVehiculo: '', descuentoGlobalManoObra: '', observaciones_generales: '', repuestos: [], manoObra: [], perito: asignarPerito(session.user.email) });
         setFotosSubidas([]);
+        setProformaUrl(null);
+        setTextoOCR('');
         setVista('inicio');
       }
       cargarInspecciones();
@@ -266,25 +433,25 @@ export default function App() {
       doc.text(`CÓDIGO: ${datos.codigo || 'N/A'}`, 14, 40);
       
       const col1 = 14; const col2 = 60; const col3 = 110; const col4 = 155;
-      doc.text(`PLACA: ${datos.placa.toUpperCase()}`, col1, 48);
-      doc.text(`MARCA: ${datos.marca.toUpperCase()}`, col2, 48);
-      doc.text(`MODELO: ${datos.modelo.toUpperCase()}`, col3, 48);
-      doc.text(`TIPO: ${datos.tipoVehiculo.toUpperCase()}`, col4, 48);
       
-      doc.text(`TRÁMITE: ${datos.tramite.toUpperCase()}`, col1, 55);
-      doc.text(`TALLER: ${datos.taller.toUpperCase()}`, col2, 55);
+      // BLINDADO CONTRA VALORES UNDEFINED
+      doc.text(`PLACA: ${(datos.placa || '').toUpperCase()}`, col1, 48);
+      doc.text(`MARCA: ${(datos.marca || '').toUpperCase()}`, col2, 48);
+      doc.text(`MODELO: ${(datos.modelo || '').toUpperCase()}`, col3, 48);
+      doc.text(`TIPO: ${(datos.tipoVehiculo || '').toUpperCase()}`, col4, 48);
+      
+      doc.text(`TRÁMITE: ${(datos.tramite || '').toUpperCase()}`, col1, 55);
+      doc.text(`TALLER: ${(datos.taller || '').toUpperCase()}`, col2, 55);
       doc.text(`FECHA: ${new Date().toLocaleDateString()}`, col4, 55);
 
-      // TABLAS CON Bs
-      const tableManoObra = datos.manoObra.map(m => [m.nombre.toUpperCase(), m.precioOriginal ? `Bs ${m.precioOriginal}` : '-', m.accion.toUpperCase(), m.accion === 'RECHAZADO' ? 'Bs 0' : `Bs ${m.precioAprobado || 0}`, m.observacion ? m.observacion.toUpperCase() : '-']);
+      const tableManoObra = datos.manoObra.map(m => [(m.nombre || '').toUpperCase(), m.precioOriginal ? `Bs ${m.precioOriginal}` : '-', (m.accion || '').toUpperCase(), m.accion === 'RECHAZADO' ? 'Bs 0' : `Bs ${m.precioAprobado || 0}`, m.observacion ? m.observacion.toUpperCase() : '-']);
       if (tableManoObra.length > 0) { autoTable(doc, { startY: 65, margin: { left: 14, right: 14 }, head: [['Mano de Obra', 'P. Original', 'Acción', 'P. Aprobado', 'Observación']], body: tableManoObra, styles: { fontSize: 8 }, headStyles: { fillColor: [0, 51, 102] } }); }
 
-      const tableRepuestos = datos.repuestos.map(r => [r.nombre.toUpperCase(), r.precioOriginal ? `Bs ${r.precioOriginal}` : 'S/P', r.accion.toUpperCase(), r.descuento ? `-${r.descuento}%` : '-', r.observacion ? r.observacion.toUpperCase() : '-']);
+      const tableRepuestos = datos.repuestos.map(r => [(r.nombre || '').toUpperCase(), r.precioOriginal ? `Bs ${r.precioOriginal}` : 'S/P', (r.accion || '').toUpperCase(), r.descuento ? `-${r.descuento}%` : '-', r.observacion ? r.observacion.toUpperCase() : '-']);
       if (tableRepuestos.length > 0) { autoTable(doc, { startY: doc.lastAutoTable ? doc.lastAutoTable.finalY + 10 : 65, margin: { left: 14, right: 14 }, head: [['Pieza / Repuesto', 'P. Original', 'Acción', 'Desc.', 'Observación']], body: tableRepuestos, styles: { fontSize: 8 }, headStyles: { fillColor: [0, 166, 80] } }); }
 
       let finalY = doc.lastAutoTable ? doc.lastAutoTable.finalY + 10 : 65;
       
-      // TOTALES CON Bs
       doc.setDrawColor(0, 51, 102); doc.rect(14, finalY, pageWidth - 28, 35); doc.setFontSize(10);
       doc.text(`Total Proforma Original: Bs ${totalProforma.toFixed(2)}`, 18, finalY + 8); 
       doc.text(`Total Mano de Obra: Bs ${totalMO.toFixed(2)}`, 18, finalY + 16); 
@@ -297,7 +464,7 @@ export default function App() {
 
       doc.setTextColor(0, 0, 0); doc.setFontSize(10); 
       doc.text("OBSERVACIONES GENERALES:", 14, finalY + 48);
-      const splitObs = doc.splitTextToSize(datos.observaciones_generales.toUpperCase() || 'NINGUNA', pageWidth - 28); 
+      const splitObs = doc.splitTextToSize((datos.observaciones_generales || 'NINGUNA').toUpperCase(), pageWidth - 28); 
       doc.text(splitObs, 14, finalY + 55);
 
       let firmaY = finalY + 55 + (splitObs.length * 5) + 10; 
@@ -344,7 +511,7 @@ export default function App() {
             doc.addImage(base64data, 'JPEG', posX, posY, anchoFoto, altoFoto); 
             
             doc.setFontSize(9); doc.setTextColor(0, 0, 0); 
-            doc.text(`Ítem: ${foto.itemVinculado.toUpperCase() || 'SIN ASIGNAR'}`, posX, posY + altoFoto + 7); 
+            doc.text(`Ítem: ${(foto.itemVinculado || 'SIN ASIGNAR').toUpperCase()}`, posX, posY + altoFoto + 7); 
           } catch (error) { console.log("Error al cargar foto", error); }
           columnaActual++; 
         }
@@ -363,7 +530,7 @@ export default function App() {
         doc.text(`Página ${i} de ${totalPages}`, pageWidth - 14, pageHeight - 5, { align: "right" });
       }
 
-      doc.save(`Diagnóstico ${datos.placa.toUpperCase()}.pdf`);
+      doc.save(`Diagnóstico ${(datos.placa || 'SIN PLACA').toUpperCase()}.pdf`);
       setCargando(false);
     } else {
       setCargando(false);
@@ -421,7 +588,10 @@ export default function App() {
     kpiCard: { background: 'white', borderRadius: '16px', padding: '25px', boxShadow: '0 4px 20px rgba(0,0,0,0.04)', border: '1px solid #e2e8f0', textAlign: 'center' },
     kpiValue: { fontSize: '36px', fontWeight: '800', color: '#005b96', margin: '10px 0' },
     kpiLabel: { fontSize: '14px', color: '#64748b', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '1px' },
-    chartCard: { background: 'white', borderRadius: '16px', padding: '25px', boxShadow: '0 4px 20px rgba(0,0,0,0.04)', border: '1px solid #e2e8f0', marginBottom: '24px' }
+    chartCard: { background: 'white', borderRadius: '16px', padding: '25px', boxShadow: '0 4px 20px rgba(0,0,0,0.04)', border: '1px solid #e2e8f0', marginBottom: '24px' },
+    visorModal: { position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 2000 },
+    visorContenido: { background: 'white', borderRadius: '12px', padding: '20px', width: '80%', maxWidth: '800px', height: '85vh', display: 'flex', flexDirection: 'column' },
+    visorFrame: { flex: 1, width: '100%', border: 'none', borderRadius: '8px', marginBottom: '15px', backgroundColor: '#f1f5f9' }
   };
 
   if (!session) {
@@ -433,7 +603,6 @@ export default function App() {
             <h2 style={{color: '#004b7a', fontSize: '24px', fontWeight: '800'}}>InspecPro</h2>
             <p style={{color: '#64748b', fontSize: '14px'}}>Sistema de Gestión de Inspecciones</p>
           </div>
-          
           <form onSubmit={handleLogin}>
             <div style={styles.formGroup}>
               <label style={styles.formLabel}>Correo Electrónico</label>
@@ -443,12 +612,8 @@ export default function App() {
               <label style={styles.formLabel}>Contraseña</label>
               <input type="password" style={styles.formInput} placeholder="********" value={password} onChange={(e) => setPassword(e.target.value)} required />
             </div>
-            
             {loginError && <p style={{color: '#ef4444', fontSize: '13px', marginTop: '10px', textAlign: 'center'}}>{loginError}</p>}
-
-            <button type="submit" style={{...styles.btnPrimary, width: '100%', justifyContent: 'center', marginTop: '25px'}}>
-              Iniciar Sesión
-            </button>
+            <button type="submit" style={{...styles.btnPrimary, width: '100%', justifyContent: 'center', marginTop: '25px'}}>Iniciar Sesión</button>
           </form>
         </div>
       </div>
@@ -457,26 +622,22 @@ export default function App() {
 
   return (
     <div style={styles.body}>
-      <nav style={styles.navbar}>
+      <nav style={styles.navbar} className="navbar">
         <div style={styles.navbarBrand} onClick={() => setVista('inicio')}>
           <img src={logoAlianza} alt="Alianza" style={styles.logo} />
           InspecPro
         </div>
-        <div style={styles.navLinks}>
+        <div style={styles.navLinks} className="navLinks">
           <span style={{...styles.navLink, background: vista === 'inicio' ? 'rgba(255,255,255,0.15)' : 'transparent'}} onClick={() => setVista('inicio')}>Inicio</span>
           <span style={{...styles.navLink, background: vista === 'historial' ? 'rgba(255,255,255,0.15)' : 'transparent'}} onClick={() => { setVista('historial'); setInspeccionSeleccionada(null); }}>Listado de Inspecciones</span>
           <span style={{...styles.navLink, background: vista === 'dashboard' ? 'rgba(255,255,255,0.15)' : 'transparent'}} onClick={() => setVista('dashboard')}>Dashboard</span>
-          
-          {/* AQUÍ ESTÁ LA PESTAÑA DE AYUDA */}
           <span style={{...styles.navLink, background: vista === 'ayuda' ? 'rgba(255,255,255,0.15)' : 'transparent'}} onClick={() => setVista('ayuda')}>Ayuda</span>
-          
           <button style={styles.btnLogout} onClick={() => setMostrarCambioPass(true)}><FaKey /> Cambiar Clave</button>
           <button style={styles.btnLogout} onClick={handleLogout}><FaSignOutAlt /> Salir</button>
         </div>
       </nav>
 
       <div style={styles.container}>
-        {/* VISTA: DASHBOARD DE INFORMES */}
         {vista === 'dashboard' && (
           <div>
             <h2 style={{...styles.heroTitle, fontSize: '28px', marginBottom: '30px'}}>Dashboard de Informes</h2>
@@ -494,8 +655,7 @@ export default function App() {
                 <div style={styles.kpiValue}>{Object.keys(ahorroPorTaller).length}</div>
               </div>
             </div>
-
-            <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '20px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '20px' }} className="dashboard-grid">
               <div style={styles.chartCard}>
                 <h3 style={{fontSize: '16px', color: '#004b7a', marginBottom: '20px'}}>Top 5 Talleres con Mayor Ahorro Generado</h3>
                 <div style={{ width: '100%', height: 300 }}>
@@ -510,7 +670,6 @@ export default function App() {
                   </ResponsiveContainer>
                 </div>
               </div>
-
               <div style={styles.chartCard}>
                 <h3 style={{fontSize: '16px', color: '#004b7a', marginBottom: '20px'}}>Distribución de Inspecciones</h3>
                 <div style={{ width: '100%', height: 300 }}>
@@ -530,9 +689,8 @@ export default function App() {
           </div>
         )}
 
-        {/* VISTA: INICIO */}
         {vista === 'inicio' && (
-          <div style={styles.heroSection}>
+          <div style={styles.heroSection} className="hero-section">
             <div>
               <h1 style={styles.heroTitle}>Gestión de Inspecciones y Control de Costos</h1>
               <p style={styles.heroText}>Elaboración de diagnósticos, ajuste de costos y reportes de inspecciones.</p>
@@ -549,14 +707,24 @@ export default function App() {
           </div>
         )}
 
-        {/* VISTA: FORMULARIO CON LISTAS DINÁMICAS */}
         {vista === 'formulario' && (
           <div>
             <button style={{...styles.btnOutline, marginBottom: '20px', padding: '10px'}} onClick={() => setVista('inicio')}><FaArrowLeft /> Volver al Inicio</button>
             
+            <div style={{ ...styles.card, border: '2px dashed #005b96', backgroundColor: '#f0f8ff', marginBottom: '20px' }}>
+              <h2 style={styles.cardTitle}><FaFileAlt /> Proforma del Taller</h2>
+              <p style={{fontSize: '13px', color: '#64748b', marginBottom: '15px'}}>Sube el PDF o foto de la proforma. La IA local extraerá los datos automáticamente.</p>
+              <div {...getRootPropsProforma()} style={{ textAlign: 'center', cursor: 'pointer', padding: '20px' }}>
+                <input {...getInputPropsProforma()} />
+                <button style={{...styles.btnPrimary, backgroundColor: '#8b5cf6'}} type="button" disabled={procesandoOCR}>
+                  {procesandoOCR ? '⏳ Analizando con IA local...' : <><FaMagic /> Subir y Escanear Proforma</>}
+                </button>
+              </div>
+            </div>
+
             <div style={styles.card}>
               <h2 style={styles.cardTitle}><FaClipboardList /> Datos del Vehículo</h2>
-              <div style={styles.formGrid}>
+              <div style={styles.formGrid} className="form-grid">
                 <div style={styles.formGroup}>
                   <label style={styles.formLabel}>Placa (Obligatorio)</label>
                   <input style={styles.formInput} placeholder="Ej: 123-ABC" value={nuevaInspeccion.placa} onChange={e => setNuevaInspeccion({...nuevaInspeccion, placa: e.target.value.toUpperCase()})} />
@@ -570,7 +738,6 @@ export default function App() {
                   <input style={styles.formInput} placeholder="Ej: Car Center" list="lista-talleres" value={nuevaInspeccion.taller} onChange={e => setNuevaInspeccion({...nuevaInspeccion, taller: e.target.value.toUpperCase()})} />
                   <datalist id="lista-talleres">{listaTalleres.map(t => (<option key={t} value={t} />))}</datalist>
                 </div>
-                
                 <div style={styles.formGroup}>
                   <label style={styles.formLabel}>Marca</label>
                   <input style={styles.formInput} placeholder="Ej: Toyota" list="lista-marcas" value={nuevaInspeccion.marca} onChange={e => setNuevaInspeccion({...nuevaInspeccion, marca: e.target.value.toUpperCase()})} />
@@ -591,26 +758,23 @@ export default function App() {
 
             <div style={styles.card}>
               <h2 style={styles.cardTitle}><FaTools /> Mano de Obra</h2>
-              <p style={{fontSize: '13px', color: '#64748b', marginBottom: '15px'}}>Indique el trabajo, monto proforma y la acción tomada (Aprobado/Ajuste/Rechazado).</p>
+              <p style={{fontSize: '13px', color: '#64748b', marginBottom: '15px'}}>Revisa los ítems extraídos por la IA local y ajusta si es necesario.</p>
               {nuevaInspeccion.manoObra.map((mano, index) => (
                 <div key={index} style={styles.itemRow}>
-                  <input style={{...styles.formInput, flex: 2}} placeholder="Trabajo (Ej: Pintura)" list="lista-mano-obra" value={mano.nombre} onChange={e => actualizarManoObra(index, 'nombre', e.target.value.toUpperCase())} />
+                  <input style={{...styles.formInput, flex: 2}} placeholder="Trabajo" list="lista-mano-obra" value={mano.nombre} onChange={e => actualizarManoObra(index, 'nombre', e.target.value.toUpperCase())} />
                   <input style={{...styles.formInput, flex: 1}} type="number" placeholder="P. Proforma Bs" value={mano.precioOriginal || ''} onChange={e => actualizarManoObra(index, 'precioOriginal', e.target.value)} />
                   <select style={{...styles.formInput, flex: 1}} value={mano.accion} onChange={e => actualizarManoObra(index, 'accion', e.target.value)}>
                     <option value="APROBADO">APROBADO</option><option value="APROBADO CON AJUSTE">APROBADO CON AJUSTE</option><option value="RECHAZADO">RECHAZADO</option>
                   </select>
                   {mano.accion === 'APROBADO CON AJUSTE' && (<input style={{...styles.formInput, flex: 1}} type="number" placeholder="P. Aprobado Bs" value={mano.precioAprobado || ''} onChange={e => actualizarManoObra(index, 'precioAprobado', e.target.value)} />)}
-                  
                   <input style={{...styles.formInput, flex: 2}} placeholder="Motivo/Observación" list="lista-obs-mano" value={mano.observacion || ''} onChange={e => actualizarManoObra(index, 'observacion', e.target.value.toUpperCase())} />
-                  
                   <button style={styles.btnDelete} onClick={() => { const n = [...nuevaInspeccion.manoObra]; n.splice(index, 1); setNuevaInspeccion({...nuevaInspeccion, manoObra: n}); }}><FaTrash /></button>
                 </div>
               ))}
               <datalist id="lista-mano-obra">{listaManoObra.map(t => (<option key={t} value={t} />))}</datalist>
               <datalist id="lista-obs-mano">{listaObsMano.map(o => (<option key={o} value={o} />))}</datalist>
-              
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '20px' }}>
-                <button style={{...styles.btnOutline, padding: '10px 15px', fontSize: '14px'}} onClick={agregarManoObra}><FaPlus /> Agregar Mano de Obra</button>
+                <button style={{...styles.btnOutline, padding: '10px 15px', fontSize: '14px'}} onClick={agregarManoObra}><FaPlus /> Agregar Manualmente</button>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                   <label style={styles.formLabel}>Desc. Global (%):</label>
                   <input style={{...styles.formInput, width: '80px', padding: '8px'}} type="number" value={nuevaInspeccion.descuentoGlobalManoObra} onChange={e => setNuevaInspeccion({...nuevaInspeccion, descuentoGlobalManoObra: e.target.value})} />
@@ -620,7 +784,7 @@ export default function App() {
 
             <div style={styles.card}>
               <h2 style={styles.cardTitle}><FaCarCrash /> Repuestos</h2>
-              <p style={{fontSize: '13px', color: '#64748b', marginBottom: '15px'}}>Ingrese el repuesto, su precio en proforma y si aplica depreciación por desgaste.</p>
+              <p style={{fontSize: '13px', color: '#64748b', marginBottom: '15px'}}>Revisa los repuestos extraídos y aplica depreciación si es necesario.</p>
               {nuevaInspeccion.repuestos.map((rep, index) => (
                 <div key={index} style={styles.itemRow}>
                   <input style={{...styles.formInput, flex: 2}} placeholder="Repuesto" list="lista-piezas" value={rep.nombre} onChange={e => actualizarRepuesto(index, 'nombre', e.target.value.toUpperCase())} />
@@ -629,15 +793,13 @@ export default function App() {
                     <option value="CAMBIO">CAMBIO</option><option value="REPARACION">REPARACION</option><option value="CAMBIO C/REC">CAMBIO C/REC</option><option value="RECHAZADO">RECHAZADO</option>
                   </select>
                   <input style={{...styles.formInput, flex: 1}} type="number" placeholder="Deprec. %" value={rep.descuento || ''} onChange={e => actualizarRepuesto(index, 'descuento', e.target.value)} />
-                  
                   <input style={{...styles.formInput, flex: 2}} placeholder="Observación (Ej: Desgaste)" list="lista-obs-repuestos" value={rep.observacion || ''} onChange={e => actualizarRepuesto(index, 'observacion', e.target.value.toUpperCase())} />
-                  
                   <button style={styles.btnDelete} onClick={() => { const n = [...nuevaInspeccion.repuestos]; n.splice(index, 1); setNuevaInspeccion({...nuevaInspeccion, repuestos: n}); }}><FaTrash /></button>
                 </div>
               ))}
               <datalist id="lista-piezas">{listaPiezas.map(p => (<option key={p} value={p} />))}</datalist>
               <datalist id="lista-obs-repuestos">{listaObsRep.map(o => (<option key={o} value={o} />))}</datalist>
-              <button style={{...styles.btnOutline, marginTop: '20px', padding: '10px 15px', fontSize: '14px'}} onClick={agregarRepuesto}><FaPlus /> Agregar Repuesto</button>
+              <button style={{...styles.btnOutline, marginTop: '20px', padding: '10px 15px', fontSize: '14px'}} onClick={agregarRepuesto}><FaPlus /> Agregar Manualmente</button>
             </div>
 
             <div style={styles.card}>
@@ -674,7 +836,7 @@ export default function App() {
               <div style={{...styles.rowBetween, fontSize: '20px', fontWeight: '800', color: ajusteNeto >= 0 ? '#16a34a' : '#dc2626', borderTop: '1px solid #bbf7d0', paddingTop: '15px', marginTop: '15px'}}><span>Ajuste Neto (Proforma vs. Final):</span> <span>Bs {ajusteNeto.toFixed(2)}</span></div>
             </div>
 
-            <div style={{ display: 'flex', gap: '15px', flexWrap: 'wrap', justifyContent: 'flex-end', marginTop: '20px' }}>
+            <div style={{ display: 'flex', gap: '15px', flexWrap: 'wrap', justifyContent: 'flex-end', marginTop: '20px' }} className="action-buttons">
               <button style={styles.btnDanger} onClick={limpiarFormulario}><FaSyncAlt /> Limpiar Formulario</button>
               <button style={styles.btnWarning} onClick={(e) => guardarYGenerar(e, true)} disabled={cargando}><FaSave /> Solo Guardar</button>
               <button style={styles.btnSuccess} onClick={(e) => guardarYGenerar(e, false)} disabled={cargando}>
@@ -684,24 +846,15 @@ export default function App() {
           </div>
         )}
 
-        {/* VISTA: HISTORIAL / LISTADO CON BUSCADOR */}
         {vista === 'historial' && !inspeccionSeleccionada && (
           <div>
             <h2 style={{...styles.heroTitle, fontSize: '28px', marginBottom: '20px'}}>Listado de Inspecciones</h2>
-            
             <div style={styles.searchBar}>
               <div style={{position: 'relative', flex: 1}}>
                 <FaSearch style={{position: 'absolute', left: '15px', top: '15px', color: '#94a3b8'}} />
-                <input 
-                  type="text" 
-                  placeholder="Buscar por Placa o Nº de Trámite..." 
-                  style={{...styles.formInput, paddingLeft: '40px'}}
-                  value={busqueda}
-                  onChange={(e) => setBusqueda(e.target.value)}
-                />
+                <input type="text" placeholder="Buscar por Placa o Nº de Trámite..." style={{...styles.formInput, paddingLeft: '40px'}} value={busqueda} onChange={(e) => setBusqueda(e.target.value)} />
               </div>
             </div>
-
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '20px' }}>
               {inspeccionesFiltradas.map(insp => (
                 <div key={insp.id} style={{...styles.card, borderLeft: '5px solid #005b96', padding: '20px', cursor: 'pointer', transition: 'transform 0.2s'}} onClick={() => setInspeccionSeleccionada(insp)}>
@@ -719,17 +872,14 @@ export default function App() {
           </div>
         )}
 
-        {/* VISTA PREVIA DE INSPECCIÓN */}
         {vista === 'historial' && inspeccionSeleccionada && (
           <div>
             <button style={{...styles.btnOutline, marginBottom: '20px', padding: '10px'}} onClick={() => setInspeccionSeleccionada(null)}><FaArrowLeft /> Volver al Listado</button>
-            
             <div style={styles.card}>
               <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #f1f5f9', paddingBottom: '15px', marginBottom: '20px'}}>
                 <h2 style={{...styles.cardTitle, margin: 0, border: 'none', padding: 0}}>Detalle de Inspección: {inspeccionSeleccionada.placa}</h2>
                 <span style={{ background: '#dcfce7', color: '#166534', padding: '8px 15px', borderRadius: '8px', fontSize: '16px', fontWeight: '800' }}>Ajuste Neto: Bs {inspeccionSeleccionada.ahorro}</span>
               </div>
-
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '30px', background: '#f8fafc', padding: '20px', borderRadius: '12px' }}>
                 <div><strong>Vehículo:</strong> {inspeccionSeleccionada.marca} {inspeccionSeleccionada.modelo} ({inspeccionSeleccionada.tipoVehiculo})</div>
                 <div><strong>N° Trámite:</strong> {inspeccionSeleccionada.tramite}</div>
@@ -737,7 +887,6 @@ export default function App() {
                 <div><strong>Total Proforma:</strong> Bs {inspeccionSeleccionada.proforma}</div>
                 <div><strong>Total Diagnóstico:</strong> Bs {inspeccionSeleccionada.diagnostico}</div>
               </div>
-
               <h3 style={{fontSize: '16px', color: '#004b7a', marginBottom: '10px'}}>Mano de Obra</h3>
               <table style={styles.previewTable}>
                 <thead><tr><th style={styles.previewTh}>Trabajo</th><th style={styles.previewTh}>P. Proforma</th><th style={styles.previewTh}>Acción</th><th style={styles.previewTh}>P. Aprobado</th></tr></thead>
@@ -747,7 +896,6 @@ export default function App() {
                   ))}
                 </tbody>
               </table>
-
               <h3 style={{fontSize: '16px', color: '#004b7a', marginTop: '30px', marginBottom: '10px'}}>Repuestos</h3>
               <table style={styles.previewTable}>
                 <thead><tr><th style={styles.previewTh}>Pieza</th><th style={styles.previewTh}>P. Proforma</th><th style={styles.previewTh}>Acción</th><th style={styles.previewTh}>Desc.</th></tr></thead>
@@ -757,24 +905,26 @@ export default function App() {
                   ))}
                 </tbody>
               </table>
-
               <h3 style={{fontSize: '16px', color: '#004b7a', marginTop: '30px', marginBottom: '10px'}}>Observaciones</h3>
               <p style={{background: '#f8fafc', padding: '15px', borderRadius: '8px', fontSize: '14px'}}>{inspeccionSeleccionada.observaciones_generales || 'Sin observaciones.'}</p>
-
+              {inspeccionSeleccionada.proforma_pdf && (
+                <div style={{ marginTop: '20px' }}>
+                  <button style={{...styles.btnPrimary, backgroundColor: '#475569'}} onClick={() => { setProformaUrl(inspeccionSeleccionada.proforma_pdf); setMostrarVisor(true); }}>
+                    <FaFileAlt /> Ver Proforma Original
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         )}
 
-        {/* VISTA DE AYUDA (AQUÍ SE MUESTRA EL COMPONENTE) */}
         {vista === 'ayuda' && <Ayuda />}
-
       </div>
 
       <footer style={styles.footer}>
         ALIANZA GRUPO ASEGURADOR - HERRAMIENTA DE USO INTERNO
       </footer>
 
-      {/* MODAL DE CAMBIO DE CONTRASEÑA */}
       {mostrarCambioPass && (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 1000 }}>
           <div style={{ background: 'white', padding: '30px', borderRadius: '12px', width: '100%', maxWidth: '400px' }}>
@@ -789,12 +939,29 @@ export default function App() {
                 <input type="password" style={styles.formInput} value={nuevaPass} onChange={e => setNuevaPass(e.target.value)} required minLength={6} />
               </div>
               {mensajePass && <p style={{ color: mensajePass.includes('Error') ? '#ef4444' : '#10b981', fontSize: '13px', marginTop: '10px' }}>{mensajePass}</p>}
-              
               <div style={{ display: 'flex', gap: '10px', marginTop: '20px' }}>
                 <button type="button" style={{...styles.btnOutline, flex: 1, justifyContent: 'center'}} onClick={() => setMostrarCambioPass(false)}>Cancelar</button>
                 <button type="submit" style={{...styles.btnPrimary, flex: 1, justifyContent: 'center'}}>Guardar</button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {mostrarVisor && proformaUrl && (
+        <div style={styles.visorModal} onClick={() => setMostrarVisor(false)}>
+          <div style={styles.visorContenido} onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+              <h3 style={{ margin: 0, color: '#004b7a' }}>Visor de Proforma</h3>
+              <button style={{ ...styles.btnDanger, padding: '8px 15px' }} onClick={() => setMostrarVisor(false)}>Cerrar</button>
+            </div>
+            {tipoArchivo === 'application/pdf' || proformaUrl.includes('.pdf') ? (
+              <iframe src={proformaUrl} style={styles.visorFrame} title="Proforma PDF" />
+            ) : (
+              <div style={{ flex: 1, overflow: 'auto', textAlign: 'center' }}>
+                <img src={proformaUrl} alt="Proforma" style={{ maxWidth: '100%', borderRadius: '8px' }} />
+              </div>
+            )}
           </div>
         </div>
       )}
