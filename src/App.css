@@ -102,3 +102,7 @@
     white-space: nowrap;
   }
 }
+/* Para el menú desplegable */
+.dropdown:hover .dropdown-content {
+  display: block !important;
+}
